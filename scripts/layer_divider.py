@@ -4,6 +4,14 @@ from scripts.layer_divider_modules import sam
 from scripts.layer_divider_modules.ui_utils import *
 from scripts.layer_divider_modules.html_constants import *
 from scripts.layer_divider_modules.model_downloader import DEFAULT_MODEL_TYPE
+from fastapi import FastAPI, Body, Request, Response
+from fastapi.responses import FileResponse
+from PIL import Image
+import cv2
+
+import io
+import base64
+import numpy as np
 
 import gradio as gr
 import os
@@ -31,13 +39,12 @@ def add_tab():
                 html_param_explain = gr.HTML(PARAMS_EXPLANATION, elem_id="html_param_explain")
 
         with gr.Row():
-            btn_generate = gr.Button("GENERATE", variant="primary")
+            btn_generate = gr.Button("GENERATE111", variant="primary")
         with gr.Row():
             gallery_output = gr.Gallery(label="Output images will be shown here").style(grid=5, height="auto")
             with gr.Column():
                 output_file = gr.outputs.File(label="Generated psd file")
                 btn_open_folder = gr.Button("📁\nOpen PSD folder")
-
         params = [nb_points_per_side, sld_pred_iou_thresh, sld_stability_score_thresh, nb_crop_n_layers,
                   nb_crop_n_points_downscale_factor, nb_min_mask_region_area]
         btn_generate.click(fn=sam_inf.generate_mask_app,
@@ -52,6 +59,36 @@ def on_unload():
     global sam_inf
     sam_inf = None
 
+def on_app_started(_: gr.Blocks, app: FastAPI):
+    @app.post("/layer_divider/divide")
+    async def _divide(request: Request):
+        data = await request.json()
+
+        base64_decoded = base64.b64decode(data['input_image'])
+        image = Image.open(io.BytesIO(base64_decoded))
+        image_np = np.array(image)
+       
+        result = sam_inf.generate_mask_app(image_np, "vit_h", 32, 0.88, 0.95, 0, 1, 0)
+
+        imageList = []
+        index = 0
+        for item in result[0]:
+            im = Image.fromarray(item[0].astype("uint8"))
+            rawBytes = io.BytesIO()
+            im.save(rawBytes, "PNG")
+            rawBytes.seek(0)
+            imString = base64.b64encode(rawBytes.read())
+            imageList.append(imString)
+            print(f'{index} of {len(result[0])}')
+            index = index + 1
+            
+        return {
+            'result': {
+                'psd': FileResponse(path=result[1], filename='layer.psd', media_type='image/psd'),
+                'imageList': imageList
+            },
+        }
 
 script_callbacks.on_ui_tabs(add_tab)
+script_callbacks.on_app_started(on_app_started)
 script_callbacks.on_script_unloaded(on_unload)
